@@ -1331,25 +1331,58 @@
         const eventDate = new Date('2025-10-20T22:00:00Z'); // UTC time for Singapore 6am
 
         // Format time
-        function formatTime(hours, minutes, seconds) {
-            return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        function formatTime(parts) {
+            return parts.time;
         }
 
         // Format date with ancient style - responsive version
-        function formatDate(date) {
-            const months = ['January', 'February', 'March', 'April', 'May', 'June', 
-                          'July', 'August', 'September', 'October', 'November', 'December'];
-            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-            
+        function formatDate(parts) {
             if (window.innerWidth < 480) {
                 // Shorter format for mobile
-                const shortDays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-                const shortMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
-                                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-                return `${shortDays[date.getDay()]}, ${shortMonths[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+                return parts.dateShort;
             }
-            
-            return `${days[date.getDay()]}, ${months[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}`;
+
+            return parts.dateLong;
+        }
+
+        /* Codex: Time-zone correction */
+        // Cache Intl formatters per city for consistent local times
+        const timeZoneFormatterCache = new Map();
+
+        function getZonedDateParts(date, timeZone) {
+            let formatterSet = timeZoneFormatterCache.get(timeZone);
+            if (!formatterSet) {
+                formatterSet = {
+                    time: new Intl.DateTimeFormat('en-US', {
+                        timeZone,
+                        hour12: false,
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    }),
+                    dateLong: new Intl.DateTimeFormat('en-US', {
+                        timeZone,
+                        weekday: 'long',
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                    }),
+                    dateShort: new Intl.DateTimeFormat('en-US', {
+                        timeZone,
+                        weekday: 'short',
+                        year: 'numeric',
+                        month: 'short',
+                        day: 'numeric'
+                    })
+                };
+                timeZoneFormatterCache.set(timeZone, formatterSet);
+            }
+
+            return {
+                time: formatterSet.time.format(date),
+                dateLong: formatterSet.dateLong.format(date),
+                dateShort: formatterSet.dateShort.format(date)
+            };
         }
 
         // Variables for random shake intervals
@@ -1521,32 +1554,14 @@
         function updateClocks() {
             const now = getCurrentTime(); // Use synced time instead of device time
             
-            // Calculate times for different timezones using UTC properly
-            const utcTime = now.getTime();
-            
-            // Belgrade time (CET/CEST - UTC+1 in winter, UTC+2 in summer)
-            // In October 2025, Europe is still on CEST (UTC+2)
-            const belgradeOffset = 2; // Hours from UTC
-            const belgradeTime = new Date(utcTime + (belgradeOffset * 60 * 60 * 1000));
-            
-            // Singapore time (SGT - UTC+8, no DST)
-            const singaporeOffset = 8; // Hours from UTC
-            const singaporeTime = new Date(utcTime + (singaporeOffset * 60 * 60 * 1000));
-            
-            // Update displays using UTC methods to avoid timezone issues
-            document.getElementById('belgrade-time').textContent = formatTime(
-                belgradeTime.getUTCHours(),
-                belgradeTime.getUTCMinutes(),
-                belgradeTime.getUTCSeconds()
-            );
-            document.getElementById('belgrade-date').textContent = formatDate(belgradeTime);
-            
-            document.getElementById('singapore-time').textContent = formatTime(
-                singaporeTime.getUTCHours(),
-                singaporeTime.getUTCMinutes(),
-                singaporeTime.getUTCSeconds()
-            );
-            document.getElementById('singapore-date').textContent = formatDate(singaporeTime);
+            const belgradeParts = getZonedDateParts(now, 'Europe/Belgrade');
+            const singaporeParts = getZonedDateParts(now, 'Asia/Singapore');
+
+            document.getElementById('belgrade-time').textContent = formatTime(belgradeParts);
+            document.getElementById('belgrade-date').textContent = formatDate(belgradeParts);
+
+            document.getElementById('singapore-time').textContent = formatTime(singaporeParts);
+            document.getElementById('singapore-date').textContent = formatDate(singaporeParts);
             
             // Calculate countdown
             const timeRemaining = eventDate - now;
