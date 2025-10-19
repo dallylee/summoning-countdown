@@ -1173,32 +1173,93 @@
         const MAX_SYNC_ATTEMPTS = 3;
         const SYNC_TIMEOUT = 5000; // 5 second timeout for mobile
         const SYNC_INTERVAL = 300000; // Re-sync every 5 minutes
+        let loadingScreenCleared = false;
+        let fallbackInUse = false;
+        let animationStarted = false;
+
+        function startMainLoop() {
+            if (animationStarted) {
+                return;
+            }
+
+            animationStarted = true;
+            requestAnimationFrame(animatedUpdate);
+            updateClocks();
+        }
+
+        function activateDeviceTimeFallback() {
+            const loadingScreen = document.getElementById('loading-screen');
+            const syncIndicator = document.getElementById('sync-indicator');
+
+            if (!loadingScreenCleared) {
+                loadingScreen.classList.add('hidden');
+                loadingScreenCleared = true;
+            }
+
+            fallbackInUse = true;
+
+            syncIndicator.style.display = 'block';
+            syncIndicator.classList.remove('syncing', 'synced');
+            syncIndicator.classList.add('error');
+            syncIndicator.textContent = '⚠ Using device time';
+
+            startMainLoop();
+
+            setTimeout(() => {
+                if (fallbackInUse) {
+                    syncIndicator.style.display = 'none';
+                }
+            }, 5000);
+
+            return false;
+        }
 
         // Function to fetch accurate time from internet with timeout
         async function syncTimeFromInternet() {
             const syncIndicator = document.getElementById('sync-indicator');
             const loadingScreen = document.getElementById('loading-screen');
-            
+
             syncIndicator.classList.remove('synced', 'error');
             syncIndicator.classList.add('syncing');
             syncIndicator.textContent = 'Syncing time...';
 
+            if (typeof fetch !== 'function') {
+                console.warn('Fetch API unavailable - falling back to device time');
+                return activateDeviceTimeFallback();
+            }
+
             try {
                 const startTime = Date.now();
-                
-                // Create abort controller for timeout
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), SYNC_TIMEOUT);
-                
-                const response = await fetch('https://worldtimeapi.org/api/timezone/Etc/UTC', {
+                const supportsAbort = typeof AbortController !== 'undefined';
+                const controller = supportsAbort ? new AbortController() : null;
+                let timeoutId;
+
+                const fetchPromise = fetch('https://worldtimeapi.org/api/timezone/Etc/UTC', {
                     cache: 'no-store',
-                    signal: controller.signal
+                    ...(supportsAbort ? { signal: controller.signal } : {})
+                }).then(response => {
+                    if (!response.ok) {
+                        throw new Error('Time API request failed');
+                    }
+                    return response;
                 });
-                
+
+                // Prevent unhandled rejections if we timeout before fetch resolves
+                fetchPromise.catch(() => {});
+
+                const timeoutPromise = new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => {
+                        if (supportsAbort && controller) {
+                            controller.abort();
+                        }
+                        reject(new Error('Time sync timeout'));
+                    }, SYNC_TIMEOUT);
+                });
+
+                const response = await Promise.race([fetchPromise, timeoutPromise]);
+
                 clearTimeout(timeoutId);
-                
-                if (!response.ok) throw new Error('Time API request failed');
-                
+
                 const data = await response.json();
                 const endTime = Date.now();
                 const requestLatency = (endTime - startTime) / 2;
@@ -1211,42 +1272,39 @@
                 timeOffset = adjustedServerTime - Date.now();
                 lastSyncTime = Date.now();
                 syncAttempts = 0;
-                
+
                 // Hide loading screen and show page
                 loadingScreen.classList.add('hidden');
-                
+                loadingScreenCleared = true;
+
                 syncIndicator.classList.remove('syncing');
                 syncIndicator.classList.add('synced');
                 syncIndicator.textContent = '✓ Time synced';
-                
+
+                fallbackInUse = false;
+                syncIndicator.style.display = 'block';
+
                 setTimeout(() => {
-                    syncIndicator.style.display = 'none';
+                    if (!fallbackInUse) {
+                        syncIndicator.style.display = 'none';
+                    }
                 }, 3000);
-                
+
                 console.log(`Time synced successfully. Offset: ${timeOffset}ms`);
                 return true;
             } catch (error) {
                 console.error('Failed to sync time:', error);
                 syncAttempts++;
-                
+
+                activateDeviceTimeFallback();
+
                 if (syncAttempts < MAX_SYNC_ATTEMPTS) {
                     // Retry after a shorter delay on mobile
                     setTimeout(() => syncTimeFromInternet(), 1000);
                 } else {
-                    // Max attempts reached, hide loading screen and use device time
-                    loadingScreen.classList.add('hidden');
-                    
-                    syncIndicator.classList.remove('syncing');
-                    syncIndicator.classList.add('error');
-                    syncIndicator.textContent = '⚠ Using device time';
-                    
-                    setTimeout(() => {
-                        syncIndicator.style.display = 'none';
-                    }, 5000);
-                    
                     console.warn('Using device time - could not sync with server');
                 }
-                
+
                 return false;
             }
         }
@@ -1617,11 +1675,17 @@
         
         // Initialize: First sync time from internet, then start the animation loop
         async function initialize() {
+            startMainLoop();
+
+            const safetyFallback = setTimeout(() => {
+                console.warn('Time sync taking too long - activating device time fallback');
+                activateDeviceTimeFallback();
+            }, SYNC_TIMEOUT + 2000);
+
             await syncTimeFromInternet();
-            requestAnimationFrame(animatedUpdate);
-            updateClocks(); // Initial update
+            clearTimeout(safetyFallback);
         }
-        
+
         // Start initialization
         initialize();
 
